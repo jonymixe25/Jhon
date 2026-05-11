@@ -1,0 +1,9 @@
+{
+  "name": "MixeSocial",
+  "description": "Plataforma social para la comunidad Mixe con chats, videollamadas, feed de fotos/videos y notificaciones en tiempo real.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ],
+  "majorCapabilities": []
+}

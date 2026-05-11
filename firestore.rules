@@ -1,0 +1,134 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isSignedIn() { return request.auth != null; }
+    function isValidId(id) { return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$'); }
+    function incoming() { return request.resource.data; }
+    function existing() { return resource.data; }
+
+    function isValidUser(data) {
+      return data.keys().hasAll(['email', 'displayName', 'createdAt']) &&
+             data.email is string && data.email.size() > 0 &&
+             data.displayName is string && data.displayName.size() > 0 &&
+             data.createdAt is timestamp &&
+             (!('photoURL' in data) || (data.photoURL is string)) &&
+             (!('contacts' in data) || (data.contacts is list && data.contacts.size() <= 1000));
+    }
+
+    match /users/{userId} {
+      // Any authenticated user can read profiles for contacts / suggestions.
+      allow read: if isSignedIn();
+      allow create: if isSignedIn() && userId == request.auth.uid && isValidUser(incoming()) && incoming().createdAt == request.time;
+      allow update: if isSignedIn() && userId == request.auth.uid && isValidUser(incoming()) && incoming().createdAt == existing().createdAt && incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'photoURL', 'contacts']);
+    }
+
+    function isValidPost(data) {
+      return data.keys().hasAll(['authorId', 'mediaUrl', 'mediaType', 'tags', 'createdAt']) &&
+             data.authorId is string && data.authorId == request.auth.uid &&
+             data.mediaUrl is string && data.mediaUrl.size() > 0 &&
+             data.mediaType is string && data.mediaType.size() > 0 &&
+             data.tags is list && data.tags.size() <= 30 &&
+             (!('description' in data) || (data.description is string && data.description.size() <= 2000)) &&
+             (!('authorName' in data) || (data.authorName is string)) &&
+             (!('authorPhoto' in data) || (data.authorPhoto is string)) &&
+             (!('likes' in data) || (data.likes is list)) &&
+             data.createdAt is timestamp;
+    }
+
+    match /posts/{postId} {
+      // Anyone authenticated can view posts feed
+      allow read: if isSignedIn();
+      allow create: if isSignedIn() && isValidPost(incoming()) && incoming().createdAt == request.time && exists(/databases/$(database)/documents/users/$(request.auth.uid));
+      
+      allow update: if isSignedIn() && (
+        // Action: Edit by author
+        (existing().authorId == request.auth.uid && incoming().diff(existing()).affectedKeys().hasOnly(['tags', 'description', 'mediaType']) && isValidPost(incoming())) ||
+        // Action: Like toggle by anyone
+        (incoming().diff(existing()).affectedKeys().hasOnly(['likes']) && incoming().authorId == existing().authorId && incoming().mediaUrl == existing().mediaUrl && incoming().mediaType == existing().mediaType && incoming().createdAt == existing().createdAt)
+      );
+
+      allow delete: if isSignedIn() && existing().authorId == request.auth.uid;
+      
+      function isValidComment(data) {
+        return data.keys().hasAll(['authorId', 'text', 'createdAt']) &&
+               data.authorId is string && data.authorId == request.auth.uid &&
+               data.text is string && data.text.size() > 0 && data.text.size() <= 1000 &&
+               (!('authorName' in data) || (data.authorName is string)) &&
+               (!('authorPhoto' in data) || (data.authorPhoto is string)) &&
+               data.createdAt is timestamp;
+      }
+
+      match /comments/{commentId} {
+        allow read: if isSignedIn();
+        allow create: if isSignedIn() && isValidComment(incoming()) && incoming().createdAt == request.time && exists(/databases/$(database)/documents/posts/$(postId));
+        allow delete: if isSignedIn() && existing().authorId == request.auth.uid;
+      }
+    }
+
+    function isValidRoom(data) {
+      return data.keys().hasAll(['type', 'members', 'createdAt']) &&
+             data.type is string && data.type.size() > 0 &&
+             data.members is list && data.members.size() > 0 && data.members.size() <= 100 &&
+             (!('name' in data) || data.name is string) &&
+             (!('activeCall' in data) || data.activeCall is bool) &&
+             data.createdAt is timestamp;
+    }
+
+    function isValidContactRequest(data) {
+      return data.keys().hasAll(['senderId', 'receiverId', 'status', 'createdAt']) &&
+             data.senderId is string && data.receiverId is string &&
+             data.status in ['pending', 'accepted', 'declined'] &&
+             data.createdAt is timestamp;
+    }
+
+    match /contactRequests/{requestId} {
+      allow read: if isSignedIn() && (resource.data.senderId == request.auth.uid || resource.data.receiverId == request.auth.uid);
+      allow create: if isSignedIn() && incoming().senderId == request.auth.uid && incoming().status == 'pending' && isValidContactRequest(incoming());
+      allow update: if isSignedIn() && incoming().diff(existing()).affectedKeys().hasOnly(['status']) && existing().receiverId == request.auth.uid && incoming().status in ['accepted', 'declined'];
+      allow delete: if isSignedIn() && (existing().senderId == request.auth.uid || existing().receiverId == request.auth.uid);
+    }
+
+    match /notifications/{notificationId} {
+      allow read: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow create: if isSignedIn();
+      allow update: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow delete: if isSignedIn() && resource.data.userId == request.auth.uid;
+    }
+
+    match /rooms/{roomId} {
+      // A user can read a room if they are a member
+      allow read: if isSignedIn() && request.auth.uid in existing().members;
+      // Note: During creation, we check that the current user adds themselves as a member
+      allow create: if isSignedIn() && isValidRoom(incoming()) && request.auth.uid in incoming().members && incoming().createdAt == request.time;
+      allow update: if isSignedIn() && request.auth.uid in existing().members && isValidRoom(incoming()) && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'members', 'activeCall']);
+      
+      function isValidMessage(data) {
+        return data.keys().hasAll(['authorId', 'text', 'createdAt']) &&
+               data.authorId is string && data.authorId == request.auth.uid &&
+               data.text is string && data.text.size() <= 4000 &&
+               data.createdAt is timestamp;
+      }
+
+      match /messages/{messageId} {
+        // Can read and write messages only if member of the room
+        allow read: if isSignedIn() && request.auth.uid in get(/databases/$(database)/documents/rooms/$(roomId)).data.members;
+        allow create: if isSignedIn() && isValidMessage(incoming()) && incoming().createdAt == request.time && request.auth.uid in get(/databases/$(database)/documents/rooms/$(roomId)).data.members;
+      }
+
+      match /signals/{signalId} {
+        // Basic signalling verification
+        allow read, write: if isSignedIn() && request.auth.uid in get(/databases/$(database)/documents/rooms/$(roomId)).data.members;
+      }
+      match /callerCandidates/{candidateId} {
+        allow read, write: if isSignedIn() && request.auth.uid in get(/databases/$(database)/documents/rooms/$(roomId)).data.members;
+      }
+      match /calleeCandidates/{candidateId} {
+        allow read, write: if isSignedIn() && request.auth.uid in get(/databases/$(database)/documents/rooms/$(roomId)).data.members;
+      }
+    }
+  }
+}
