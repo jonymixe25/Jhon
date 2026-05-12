@@ -39,7 +39,7 @@ export default function Register() {
   };
 
   return (
-    <div className="flex flex-col items-center justify-center min-h-[100dvh] bg-slate-900 text-slate-200 px-6">
+    <div className="flex flex-col items-center justify-center min-h-[100dvh] bg-slate-900 text-slate-200 px-6 relative">
       <div className="bento-card w-full max-w-sm flex flex-col items-center text-center space-y-6">
         <div className="w-20 h-20 bg-indigo-500 rounded-2xl flex items-center justify-center shadow-[0_0_30px_rgba(99,102,241,0.4)]">
           <Camera size={40} className="text-white" />
@@ -126,6 +126,13 @@ export default function Register() {
           ¿Ya tienes cuenta? <Link to="/login" className="text-indigo-400 font-medium">Entra aquí</Link>
         </p>
       </div>
+
+      {/* Footer */}
+      <footer className="absolute bottom-2 left-0 right-0 text-center z-40">
+        <p className="text-[9px] text-slate-600 font-medium tracking-tight">
+          © derechos reservados Tlahuitoltepec Mixe 2026
+        </p>
+      </footer>
     </div>
   );
 }
